@@ -24,7 +24,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-APP_VERSION = "9.4-cloud"
+APP_VERSION = "9.4-cloud2"
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -820,10 +820,9 @@ def normalize_instagram_post_url(url):
 
 
 def extract_instagram_with_gallery_dl(url):
-    """Extract public Instagram image URLs through gallery-dl using Chrome cookies.
+    """Extract media URLs from a public Instagram page without login cookies.
 
-    gallery-dl is used only for the user's explicit local browser session. The
-    command returns media URLs; no passwords are read or stored by this app.
+    Cloud-safe: does not read local browser sessions.
     """
     clean_url = normalize_instagram_post_url(url)
 
@@ -831,8 +830,6 @@ def extract_instagram_with_gallery_dl(url):
         sys.executable,
         "-m",
         "gallery_dl",
-        "--cookies-from-browser",
-        "chrome",
         "-g",
         clean_url,
     ]
@@ -1622,20 +1619,7 @@ def resolve():
 
     if platform == "instagram":
 
-        # Photo/carousel first: yt-dlp is unreliable for image-only posts.
-        try:
-            photo = extract_instagram_with_gallery_dl(url)
-            return jsonify(
-                {
-                    "status": "success",
-                    "platform": "instagram",
-                    **photo,
-                }
-            )
-        except Exception:
-            pass
-
-        # If gallery-dl did not produce images, try yt-dlp for a normal Reel/video.
+        # Primary public cloud path: yt-dlp for Reels/video posts.
         try:
             info = resolve_video(url)
             if isinstance(info, dict) and info.get("_type") != "playlist":
@@ -1650,6 +1634,19 @@ def resolve():
                         "webpage_url": info.get("webpage_url") or url,
                     }
                 )
+        except Exception:
+            pass
+
+        # Public gallery-dl fallback for image/carousel posts. No cookies.
+        try:
+            photo = extract_instagram_with_gallery_dl(url)
+            return jsonify(
+                {
+                    "status": "success",
+                    "platform": "instagram",
+                    **photo,
+                }
+            )
         except Exception:
             pass
 
