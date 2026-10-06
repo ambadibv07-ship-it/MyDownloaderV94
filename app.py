@@ -26,8 +26,6 @@ app = Flask(__name__)
 
 APP_VERSION = "9.4-cloud"
 
-CLOUD_MODE = os.getenv("CLOUD_MODE", "1").strip().lower() in ("1", "true", "yes", "on")
-
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -138,25 +136,18 @@ def get_common_ytdl_opts():
 
 
 def get_instagram_ytdl_opts():
-    """yt-dlp options for Instagram video/reel using the user's local Chrome session.
+    """yt-dlp options for public Instagram media in the cloud.
 
-    The app does not store passwords or cookie values. yt-dlp reads the existing
-    Chrome session only when resolving/downloading an Instagram video.
+    Cloud deployments must not read a user's local browser cookies.
+    This resolver is limited to media exposed publicly without login.
     """
     options = get_common_ytdl_opts()
-
-    # Instagram video pages may redirect logged-out clients to login or expose
-    # incomplete formats. Reuse the same local Chrome session that gallery-dl
-    # already uses successfully for Instagram photos/carousels.
-    if not CLOUD_MODE:
-        options["cookiesfrombrowser"] = ("chrome", None, None, None)
     options["extractor_args"] = {
         "instagram": {
             "webpage_skip": ["dash", "hls"]
         }
     }
     return options
-
 
 def get_facebook_ytdl_opts(use_browser_session=False):
     """yt-dlp options for Facebook.
@@ -168,7 +159,7 @@ def get_facebook_ytdl_opts(use_browser_session=False):
     """
     options = get_common_ytdl_opts()
 
-    if use_browser_session and not CLOUD_MODE:
+    if use_browser_session:
         options["cookiesfrombrowser"] = ("chrome", None, None, None)
         try:
             import curl_cffi  # noqa: F401
@@ -225,7 +216,7 @@ def gallery_dl_facebook_urls(url, use_browser_session=True):
     """
     commands = []
 
-    if use_browser_session and not CLOUD_MODE:
+    if use_browser_session:
         commands.append([
             sys.executable,
             "-m",
@@ -836,10 +827,15 @@ def extract_instagram_with_gallery_dl(url):
     """
     clean_url = normalize_instagram_post_url(url)
 
-    command = [sys.executable, "-m", "gallery_dl"]
-    if not CLOUD_MODE:
-        command += ["--cookies-from-browser", "chrome"]
-    command += ["-g", clean_url]
+    command = [
+        sys.executable,
+        "-m",
+        "gallery_dl",
+        "--cookies-from-browser",
+        "chrome",
+        "-g",
+        clean_url,
+    ]
 
     try:
         completed = subprocess.run(
@@ -1063,6 +1059,8 @@ def instagram_story_highlight_urls(url, mode):
         "gallery_dl",
         "-g",
         "--no-input",
+        "--cookies-from-browser",
+        "chrome",
         "-o",
         f"extractor.instagram.include={mode}",
         "-o",
@@ -1368,10 +1366,10 @@ def home():
                 "Instagram carousel extraction",
                 "browser preview UI at /ui",
                 "selected carousel image download",
-                "Cloud-compatible public Instagram Reel/video download",
+                "Instagram Reel video download with Chrome session",
                 "Facebook private/login-required link detection",
-                "Public Instagram Stories download when exposed without login",
-                "Public Instagram Highlights download when exposed without login",
+                "Instagram Stories download",
+                "Instagram Highlights download",
                 "download completion notification",
             ],
         }
