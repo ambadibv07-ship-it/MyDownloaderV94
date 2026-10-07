@@ -24,7 +24,9 @@ except ImportError:
 
 app = Flask(__name__)
 
-APP_VERSION = "9.4-cloud2"
+APP_VERSION = "9.4-cloud"
+
+CLOUD_MODE = os.getenv("CLOUD_MODE", "1").strip().lower() in ("1", "true", "yes", "on")
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -136,18 +138,25 @@ def get_common_ytdl_opts():
 
 
 def get_instagram_ytdl_opts():
-    """yt-dlp options for public Instagram media in the cloud.
+    """yt-dlp options for Instagram video/reel using the user's local Chrome session.
 
-    Cloud deployments must not read a user's local browser cookies.
-    This resolver is limited to media exposed publicly without login.
+    The app does not store passwords or cookie values. yt-dlp reads the existing
+    Chrome session only when resolving/downloading an Instagram video.
     """
     options = get_common_ytdl_opts()
+
+    # Instagram video pages may redirect logged-out clients to login or expose
+    # incomplete formats. Reuse the same local Chrome session that gallery-dl
+    # already uses successfully for Instagram photos/carousels.
+    if not CLOUD_MODE:
+        options["cookiesfrombrowser"] = ("chrome", None, None, None)
     options["extractor_args"] = {
         "instagram": {
             "webpage_skip": ["dash", "hls"]
         }
     }
     return options
+
 
 def get_facebook_ytdl_opts(use_browser_session=False):
     """yt-dlp options for Facebook.
@@ -159,7 +168,7 @@ def get_facebook_ytdl_opts(use_browser_session=False):
     """
     options = get_common_ytdl_opts()
 
-    if use_browser_session:
+    if use_browser_session and not CLOUD_MODE:
         options["cookiesfrombrowser"] = ("chrome", None, None, None)
         try:
             import curl_cffi  # noqa: F401
@@ -216,7 +225,7 @@ def gallery_dl_facebook_urls(url, use_browser_session=True):
     """
     commands = []
 
-    if use_browser_session:
+    if use_browser_session and not CLOUD_MODE:
         commands.append([
             sys.executable,
             "-m",
@@ -820,19 +829,17 @@ def normalize_instagram_post_url(url):
 
 
 def extract_instagram_with_gallery_dl(url):
-    """Extract media URLs from a public Instagram page without login cookies.
+    """Extract public Instagram image URLs through gallery-dl using Chrome cookies.
 
-    Cloud-safe: does not read local browser sessions.
+    gallery-dl is used only for the user's explicit local browser session. The
+    command returns media URLs; no passwords are read or stored by this app.
     """
     clean_url = normalize_instagram_post_url(url)
 
-    command = [
-        sys.executable,
-        "-m",
-        "gallery_dl",
-        "-g",
-        clean_url,
-    ]
+    command = [sys.executable, "-m", "gallery_dl"]
+    if not CLOUD_MODE:
+        command += ["--cookies-from-browser", "chrome"]
+    command += ["-g", clean_url]
 
     try:
         completed = subprocess.run(
@@ -1056,8 +1063,6 @@ def instagram_story_highlight_urls(url, mode):
         "gallery_dl",
         "-g",
         "--no-input",
-        "--cookies-from-browser",
-        "chrome",
         "-o",
         f"extractor.instagram.include={mode}",
         "-o",
@@ -1363,10 +1368,10 @@ def home():
                 "Instagram carousel extraction",
                 "browser preview UI at /ui",
                 "selected carousel image download",
-                "Instagram Reel video download with Chrome session",
+                "Cloud-compatible public Instagram Reel/video download",
                 "Facebook private/login-required link detection",
-                "Instagram Stories download",
-                "Instagram Highlights download",
+                "Public Instagram Stories download when exposed without login",
+                "Public Instagram Highlights download when exposed without login",
                 "download completion notification",
             ],
         }
@@ -1619,7 +1624,20 @@ def resolve():
 
     if platform == "instagram":
 
-        # Primary public cloud path: yt-dlp for Reels/video posts.
+        # Photo/carousel first: yt-dlp is unreliable for image-only posts.
+        try:
+            photo = extract_instagram_with_gallery_dl(url)
+            return jsonify(
+                {
+                    "status": "success",
+                    "platform": "instagram",
+                    **photo,
+                }
+            )
+        except Exception:
+            pass
+
+        # If gallery-dl did not produce images, try yt-dlp for a normal Reel/video.
         try:
             info = resolve_video(url)
             if isinstance(info, dict) and info.get("_type") != "playlist":
@@ -1634,19 +1652,6 @@ def resolve():
                         "webpage_url": info.get("webpage_url") or url,
                     }
                 )
-        except Exception:
-            pass
-
-        # Public gallery-dl fallback for image/carousel posts. No cookies.
-        try:
-            photo = extract_instagram_with_gallery_dl(url)
-            return jsonify(
-                {
-                    "status": "success",
-                    "platform": "instagram",
-                    **photo,
-                }
-            )
         except Exception:
             pass
 
